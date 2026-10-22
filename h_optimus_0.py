@@ -66,6 +66,12 @@ def main():
             raise ValueError("Expected an 8-bit RGB H&E TIFF")
         with series.aszarr() as store:
             slide = zarr.open(store, mode="r")
+            # A pyramidal TIFF may open as a group of resolution levels.
+            # Select its full-resolution image array before reading pixels.
+            if isinstance(slide, zarr.Group):
+                multiscales = slide.attrs.get("multiscales")
+                level_path = multiscales[0]["datasets"][0]["path"] if multiscales else "0"
+                slide = slide[level_path]
             height, width = slide.shape[:2]
 
             # STEP 6: Visit nonoverlapping patches, skipping incomplete edges.

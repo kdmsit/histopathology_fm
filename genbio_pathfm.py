@@ -6,7 +6,10 @@ Run:
     python genbio_pathfm.py
 
 Edit IMAGE_PATH below to match the H&E file on your server.
-H-Optimus-0 users: accept access on Hugging Face, then run `hf auth login`.
+GenBio-PathFM is not gated on Hugging Face, so no login is needed.
+
+Preprocessing follows the GenBio-PathFM paper (bioRxiv 2026.03.17.712534):
+224x224 tiles, the Virchow2 HSV tissue filter, and no stain normalization.
 """
 from pathlib import Path
 
@@ -30,7 +33,13 @@ SOURCE_MPP_X = 0.2737653984781153
 SOURCE_MPP_Y = 0.2737746952056361
 TARGET_MPP = 0.5
 PATCH_SIZE = 224
-MIN_TISSUE = 0.20  # Keep patches with at least 20% colored tissue.
+# Tissue filter from the paper (adopted from Virchow2): a pixel is tissue if
+# Hue in [90, 180], Saturation in [8, 255] and Value in [103, 255], with hue on
+# OpenCV's 0-180 scale. Patches with more than 35% background are discarded.
+TISSUE_HUE = (90, 180)
+TISSUE_SATURATION = (8, 255)
+TISSUE_VALUE = (103, 255)
+MAX_BACKGROUND = 0.35
 MAX_PATCHES = 10   # Start with 10; set to None to process the whole slide.
 SAVE_PATCHES = True  # Save each kept patch as PNG images so you can inspect them.
 PATCH_FOLDER = OUTPUT_FOLDER / "patches"
@@ -81,10 +90,18 @@ def main():
                         (PATCH_SIZE, PATCH_SIZE), Image.Resampling.BILINEAR
                     )
 
-                    # STEP 7: Skip mostly white background using color saturation.
-                    hsv = np.asarray(patch.convert("HSV"))
-                    tissue_fraction = (hsv[:, :, 1] > 25).mean()
-                    if tissue_fraction < MIN_TISSUE:
+                    # STEP 7: Skip background with the paper's HSV tissue filter.
+                    # PIL stores hue as 0-255, so convert it to OpenCV's 0-180 scale.
+                    hsv = np.asarray(patch.convert("HSV")).astype(np.float32)
+                    hue = hsv[:, :, 0] * 180 / 255
+                    saturation, value = hsv[:, :, 1], hsv[:, :, 2]
+                    is_tissue = (
+                        (hue >= TISSUE_HUE[0]) & (hue <= TISSUE_HUE[1])
+                        & (saturation >= TISSUE_SATURATION[0]) & (saturation <= TISSUE_SATURATION[1])
+                        & (value >= TISSUE_VALUE[0]) & (value <= TISSUE_VALUE[1])
+                    )
+                    tissue_fraction = is_tissue.mean()
+                    if 1 - tissue_fraction > MAX_BACKGROUND:
                         continue
 
                     # STEP 8: Save the patch before and after resizing, and print
@@ -101,6 +118,8 @@ def main():
                               f"channel means {inputs.mean(dim=(0, 2, 3)).tolist()}", flush=True)
 
                     # STEP 9: Extract one feature vector from this tissue patch.
+                    # The model embeds R, G and B separately and concatenates their
+                    # CLS tokens: 3 x 1536 = 4608 numbers per patch.
                     with torch.inference_mode():
                         output = model(inputs)
                     vector = output.float().cpu().numpy()[0]
@@ -118,7 +137,7 @@ def main():
     # Row i in features.npy corresponds to row i in coordinates.csv.
     # Coordinates use source-image pixels, not Xenium cell coordinates.
     if not features:
-        raise ValueError("No tissue patches found; check the image and MIN_TISSUE")
+        raise ValueError("No tissue patches found; check the image and MAX_BACKGROUND")
     OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
     np.save(OUTPUT_FOLDER / "features.npy", np.stack(features))
     np.savetxt(OUTPUT_FOLDER / "coordinates.csv", coordinates,

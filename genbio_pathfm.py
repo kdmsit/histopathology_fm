@@ -21,7 +21,7 @@ from transformers import AutoModel
 
 # STEP 1: Set the input image, output folder, and patch settings.
 # This must point to the separate H&E scan, not a Xenium fluorescence image.
-IMAGE_PATH = Path("../project/Xenium/Xenium_V1_human_Pancreas_FFPE_he_image.ome.tif")
+IMAGE_PATH = Path("../../project/Xenium/Xenium_V1_human_Pancreas_FFPE_he_image.ome.tif")
 OUTPUT_FOLDER = Path("results/genbio")
 
 # These source resolutions were read from YOUR pancreas H&E file's metadata.
@@ -32,6 +32,8 @@ TARGET_MPP = 0.5
 PATCH_SIZE = 224
 MIN_TISSUE = 0.20  # Keep patches with at least 20% colored tissue.
 MAX_PATCHES = 10   # Start with 10; set to None to process the whole slide.
+SAVE_PATCHES = True  # Save each kept patch as PNG images so you can inspect them.
+PATCH_FOLDER = OUTPUT_FOLDER / "patches"
 
 
 def main():
@@ -85,8 +87,20 @@ def main():
                     if tissue_fraction < MIN_TISSUE:
                         continue
 
-                    # STEP 8: Extract one feature vector from this tissue patch.
+                    # STEP 8: Save the patch before and after resizing, and print
+                    # what the model receives after normalization.
                     inputs = transform(patch).unsqueeze(0).to(device)
+                    if SAVE_PATCHES:
+                        PATCH_FOLDER.mkdir(parents=True, exist_ok=True)
+                        name = f"patch_{len(features):04d}_x{x}_y{y}"
+                        Image.fromarray(pixels).save(PATCH_FOLDER / f"{name}_raw.png")
+                        patch.save(PATCH_FOLDER / f"{name}_224.png")
+                        print(f"{name}: raw crop {pixels.shape}, resized {patch.size}, "
+                              f"tissue {tissue_fraction:.2f}, model input {tuple(inputs.shape)}, "
+                              f"min {inputs.min().item():.2f}, max {inputs.max().item():.2f}, "
+                              f"channel means {inputs.mean(dim=(0, 2, 3)).tolist()}", flush=True)
+
+                    # STEP 9: Extract one feature vector from this tissue patch.
                     with torch.inference_mode():
                         output = model(inputs)
                     vector = output.float().cpu().numpy()[0]
@@ -100,7 +114,7 @@ def main():
                 if MAX_PATCHES is not None and len(features) >= MAX_PATCHES:
                     break
 
-    # STEP 9: Save features and their matching original-image coordinates.
+    # STEP 10: Save features and their matching original-image coordinates.
     # Row i in features.npy corresponds to row i in coordinates.csv.
     # Coordinates use source-image pixels, not Xenium cell coordinates.
     if not features:

@@ -31,8 +31,11 @@ OUTPUT_FOLDER = Path("results/genbio")
 # Change them if you use a different slide. Units: micrometers per pixel.
 SOURCE_MPP_X = 0.2737653984781153
 SOURCE_MPP_Y = 0.2737746952056361
-TARGET_MPP = 0.5
+
+# Change it to focus on different aspects of the Cell
+TARGET_MPP = 0.1
 PATCH_SIZE = 224
+
 # Tissue filter from the paper (adopted from Virchow2): a pixel is tissue if
 # Hue in [90, 180], Saturation in [8, 255] and Value in [103, 255], with hue on
 # OpenCV's 0-180 scale. Patches with more than 35% background are discarded.
@@ -42,16 +45,16 @@ TISSUE_VALUE = (103, 255)
 MAX_BACKGROUND = 0.35
 MAX_PATCHES = 10   # Start with 10; set to None to process the whole slide.
 SAVE_PATCHES = True  # Save each kept patch as PNG images so you can inspect them.
-PATCH_FOLDER = OUTPUT_FOLDER / "patches"
+
+# PATCH_FOLDER = OUTPUT_FOLDER / "patches_"+str(TARGET_MPP)
+PATCH_FOLDER = OUTPUT_FOLDER / f"patches_{TARGET_MPP}"
 
 
 def main():
-    # STEP 2: Select the GPU if available and load the pretrained model.
+    # Load the pretrained Gen-BioFM model.
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Loading GenBio-PathFM on {device}", flush=True)
-    model = AutoModel.from_pretrained(
-        "genbio-ai/genbio-pathfm", trust_remote_code=True
-    )
+    model = AutoModel.from_pretrained( "genbio-ai/genbio-pathfm", trust_remote_code=True)
     model = model.to(device).eval()
 
     # STEP 3: Apply this model's required RGB normalization.
@@ -60,37 +63,32 @@ def main():
         transforms.Normalize(mean=(0.697, 0.575, 0.728), std=(0.188, 0.240, 0.187)),
     ])
 
-    # STEP 4: Calculate how much original tissue belongs in each patch.
-    # About 409 source pixels become 224 pixels at 0.5 micrometers/pixel.
+    # Calculate how much original tissue belongs in each patch.
     crop_width = round(PATCH_SIZE * TARGET_MPP / SOURCE_MPP_X)
     crop_height = round(PATCH_SIZE * TARGET_MPP / SOURCE_MPP_Y)
     features = []
     coordinates = []
 
-    # STEP 5: Open the full-resolution TIFF with tiled reading to save RAM.
+    # Open the full-resolution TIFF with tiled reading to save RAM.
     with tifffile.TiffFile(IMAGE_PATH) as tif:
         series = tif.series[0].levels[0]
         if series.axes not in ("YXS", "YXC") or series.shape[-1] != 3 or series.dtype != np.dtype("uint8"):
             raise ValueError("Expected an 8-bit RGB H&E TIFF")
         with series.aszarr() as store:
             slide = zarr.open(store, mode="r")
-            # A pyramidal TIFF may open as a group of resolution levels.
-            # Select its full-resolution image array before reading pixels.
             if isinstance(slide, zarr.Group):
                 multiscales = slide.attrs.get("multiscales")
                 level_path = multiscales[0]["datasets"][0]["path"] if multiscales else "0"
                 slide = slide[level_path]
             height, width = slide.shape[:2]
 
-            # STEP 6: Visit nonoverlapping patches, skipping incomplete edges.
+            # Visit nonoverlapping patches, skipping incomplete edges.
             for y in range(0, height - crop_height + 1, crop_height):
                 for x in range(0, width - crop_width + 1, crop_width):
                     pixels = np.asarray(slide[y:y+crop_height, x:x+crop_width, :])
-                    patch = Image.fromarray(pixels).resize(
-                        (PATCH_SIZE, PATCH_SIZE), Image.Resampling.BILINEAR
-                    )
+                    patch = Image.fromarray(pixels).resize((PATCH_SIZE, PATCH_SIZE), Image.Resampling.BILINEAR)
 
-                    # STEP 7: Skip background with the paper's HSV tissue filter.
+                    # Skip background with the paper's HSV tissue filter.
                     # PIL stores hue as 0-255, so convert it to OpenCV's 0-180 scale.
                     hsv = np.asarray(patch.convert("HSV")).astype(np.float32)
                     hue = hsv[:, :, 0] * 180 / 255
@@ -111,7 +109,7 @@ def main():
                         PATCH_FOLDER.mkdir(parents=True, exist_ok=True)
                         name = f"patch_{len(features):04d}_x{x}_y{y}"
                         Image.fromarray(pixels).save(PATCH_FOLDER / f"{name}_raw.png")
-                        patch.save(PATCH_FOLDER / f"{name}_224.png")
+                        # patch.save(PATCH_FOLDER / f"{name}_224.png")
                         print(f"{name}: raw crop {pixels.shape}, resized {patch.size}, "
                               f"tissue {tissue_fraction:.2f}, model input {tuple(inputs.shape)}, "
                               f"min {inputs.min().item():.2f}, max {inputs.max().item():.2f}, "

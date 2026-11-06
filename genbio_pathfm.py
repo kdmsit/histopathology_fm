@@ -1,22 +1,4 @@
-"""Extract GenBio-PathFM features from an H&E slide.
 
-Install:
-    pip install torch torchvision transformers==4.57.1 timm huggingface_hub tifffile zarr imagecodecs pillow numpy
-
-Use from Python:
-    from genbio_pathfm import GenBioPathFM
-    model = GenBioPathFM()
-    features, coordinates = model.get_embedding("slide_he_image.ome.tif", max_patches=10)
-
-Or run this file directly (edit IMAGE_PATH at the bottom first):
-    python genbio_pathfm.py
-
-GenBio-PathFM is not gated on Hugging Face, so no login is needed.
-
-Preprocessing follows the GenBio-PathFM paper (bioRxiv 2026.03.17.712534):
-224x224 tiles, the Virchow2 HSV tissue filter, and no stain normalization.
-The slide must be the separate 8-bit RGB H&E scan, not a Xenium fluorescence image.
-"""
 import re
 from pathlib import Path
 
@@ -30,7 +12,6 @@ from transformers import AutoModel
 
 
 class GenBioPathFM:
-    """Wraps the GenBio-PathFM model and turns an H&E slide into patch embeddings."""
 
     MODEL_NAME = "genbio-ai/genbio-pathfm"
     EMBEDDING_DIM = 4608  # R, G and B embedded separately: 3 x 1536 CLS tokens.
@@ -69,24 +50,6 @@ class GenBioPathFM:
         batch_size=32,
         patch_folder=None,
     ):
-        """Tile a slide, drop background tiles and embed the rest.
-
-        slide_path: path to the 8-bit RGB H&E .tif / .ome.tif.
-        source_mpp: slide resolution in micrometers per pixel, as one number or
-            an (x, y) pair. If None, it is read from the OME-XML metadata.
-        target_mpp: resolution the model sees. Each tile covers
-            patch_size * target_mpp micrometers of tissue.
-        patch_size: tile size in pixels given to the model.
-        max_background: tiles with more than this fraction of background are skipped.
-        max_patches: stop after this many tissue tiles; None processes the whole slide.
-        batch_size: tiles sent to the model at once.
-        patch_folder: if set, saves each kept tile (raw crop and resized) as PNG.
-
-        Returns (features, coordinates):
-            features: float32 array of shape (N, 4608).
-            coordinates: int array of shape (N, 2) with the (x, y) top-left corner
-                of each tile in source-image pixels (not Xenium coordinates).
-        """
         slide_path = Path(slide_path)
         if patch_folder is not None:
             patch_folder = Path(patch_folder)

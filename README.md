@@ -17,10 +17,6 @@ Histopathology foundation models for extracting tile-level embeddings from H&E w
 pip install torch torchvision transformers==4.57.1 timm huggingface_hub tifffile zarr imagecodecs pillow numpy
 ```
 
-GenBio-PathFM is not gated on Hugging Face, so no login is needed. The weights are downloaded on first run.
-
-**GPU note:** if you see `The NVIDIA driver on your system is too old` and the model loads on CPU, your PyTorch build needs a newer CUDA than your driver supports. Install a PyTorch build matching your driver, for example for a CUDA 12.8 driver:
-
 ```bash
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
@@ -51,36 +47,6 @@ python run_genbio.py path/to/he_image.ome.tif --output results/genbio_full
 
 The slide's source resolution is set at the top of `run_genbio.py` (`SOURCE_MPP_X`, `SOURCE_MPP_Y`, currently the Xenium human pancreas FFPE H&E at ~0.2738 µm/px). Change these for a different slide.
 
-### Python
-
-```python
-from genbio_pathfm import GenBioPathFM
-
-model = GenBioPathFM()  # loads the model once
-features, coordinates = model.get_embedding(
-    "path/to/he_image.ome.tif",
-    source_mpp=(0.2737653984781153, 0.2737746952056361),  # or None to read from OME metadata
-    target_mpp=0.5,
-    patch_size=224,
-    max_background=0.35,
-    max_patches=None,
-    batch_size=32,
-    patch_folder=None,
-)
-# features:    (N, 4608) float32
-# coordinates: (N, 2) int, top-left (x, y) of each tile in H&E pixels
-```
-
-## How it works
-
-Preprocessing follows the GenBio-PathFM paper (bioRxiv 2026.03.17.712534):
-
-1. Open the full-resolution level of the (pyramidal) OME-TIFF lazily, without loading the whole slide into memory.
-2. Cut non-overlapping tiles covering `patch_size × target_mpp` µm (about 409 px at 0.274 µm/px for 224 px at 0.5 µm/px) and resize them to `patch_size`.
-3. Keep tissue tiles only, using the Virchow2 HSV filter (H 90–180, S 8–255, V 103–255 on OpenCV's scale).
-4. Normalize with the model's RGB mean/std. No stain normalization.
-5. Embed each tile. The model embeds R, G and B separately and concatenates their CLS tokens: 3 × 1536 = **4608** values per tile.
-
 ## Outputs
 
 | File | Contents |
@@ -89,10 +55,6 @@ Preprocessing follows the GenBio-PathFM paper (bioRxiv 2026.03.17.712534):
 | `coordinates.csv` | `x,y` top-left corner of each tile in H&E image pixels; row *i* matches row *i* of `features.npy` |
 | `patches/` | Tile PNGs (only with `--save-patches`) |
 
-Notes:
-
-- Each embedding is the tile-level (CLS) feature. There is no slide-level embedding; pool the tile features (for example `features.mean(axis=0)`) if you need one.
-- Coordinates are in H&E pixel space, not Xenium micron space. To match tiles with Xenium cells, transform them with the H&E alignment matrix from the Xenium output.
 
 ## License
 
